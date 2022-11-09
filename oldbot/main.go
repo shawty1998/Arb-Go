@@ -208,71 +208,79 @@ func (g *Graph) FindArbitrageLoop(source int) []int {
 	}
 }
 
-func Eb(e1, convertFrom, convertTo *big.Int) big.Int {
-	eb := new(big.Int)
-	numerator := new(big.Int)
-	denominator := new(big.Int)
+func Eb(e1, convertFrom, convertTo *big.Rat) big.Rat {
+	//Do conversions at the start to make things cleaner
+
+	eb := new(big.Rat)
+	numerator := new(big.Rat)
+	denominator := new(big.Rat)
+	er := new(big.Rat)
 
 	//pancake swap fee is 0.025 so value out r, is .975
-	fee_num := big.NewInt(975)
-	fee_dom := big.NewInt(1000)
+	fee := big.NewRat(975, 1000)
 	// (E1*r*ConvertTo)/(ConvertFrom+r*E1)
 	//e1 * r
-	numerator.Mul(e1, fee_num)
-	numerator.Div(numerator, fee_dom)
-	numerator.Mul(numerator, convertTo)
 
-	denominator.Mul(e1, fee_num)
-	denominator.Div(denominator, fee_dom)
-	denominator.Add(denominator, convertFrom)
+	er.Mul(e1, fee)
 
-	eb.Div(numerator, denominator)
+	numerator.Mul(er, convertTo)
+
+	denominator = denominator.Add(er, convertFrom)
+
+	eb.Quo(numerator, denominator)
+
 	return *eb
 }
 
-func Ea(e0, e1, convertFrom *big.Int) big.Int {
-	ea := new(big.Int)
-	numerator := new(big.Int)
-	denominator := new(big.Int)
+func Ea(e0, e1, convertFrom *big.Rat) big.Rat {
+	//conversion to Rat
+
+	ea := new(big.Rat)
+	numerator := new(big.Rat)
+	denominator := new(big.Rat)
 
 	//pancake swap fee is 0.025 so value out r, is .975
-	fee_num := big.NewInt(975)
-	fee_dom := big.NewInt(1000)
+	fee := big.NewRat(975, 1000)
 	// (E0*ConvertFrom)/(ConvertFrom+r*E1)
 	//e1 * r
 
 	numerator.Mul(e0, convertFrom)
 
-	denominator.Mul(e1, fee_num)
-	denominator.Div(denominator, fee_dom)
+	denominator.Mul(e1, fee)
 	denominator.Add(denominator, convertFrom)
 
-	ea.Div(numerator, denominator)
+	ea.Quo(numerator, denominator)
 	return *ea
 }
 
-func evaluate(e0, f0, delta *big.Int) big.Int {
-	e := new(big.Int)
-	numerator := new(big.Int)
-	denominator := new(big.Int)
+func evaluate(e0, f0 *big.Rat, delta *big.Int) big.Int {
+
+	_delta := big.NewRat(delta.Int64(), 1)
+
+	e := new(big.Rat)
+
+	numerator := new(big.Rat)
+	denominator := new(big.Rat)
 
 	//pancake swap fee is 0.025 so value out r, is .975
-	fee_num := big.NewInt(975)
-	fee_dom := big.NewInt(1000)
 
-	delta_r := new(big.Int)
+	//E0*delta*r/(F0+r*delta)
 
-	delta_r.Mul(delta, fee_num)
-	delta_r.Div(delta, fee_dom)
+	fee := big.NewRat(975, 1000)
 
-	numerator.Mul(e0, delta_r)
-	denominator.Add(f0, delta_r)
+	delta_r := new(big.Rat)
+	delta_r.Mul(_delta, fee)
 
-	e.Div(numerator, denominator)
-	return *e
+	numerator.Mul(f0, _delta)
+	denominator.Add(e0, delta_r)
+	e.Quo(numerator, denominator)
+
+	Float, _ := e.Float64()
+
+	return *big.NewInt(int64(math.RoundToEven(Float)))
 }
 
-func simplifyArb(eVals [][]big.Int, pairs []Pair) [][]big.Int {
+func simplifyArb(eVals [][]big.Rat, pairs []Pair) [][]big.Rat {
 
 	// 4 pairs [(A,B), (B',C), (C',D), (D',A)]
 	// evals: [[e0,e1]]
@@ -285,53 +293,68 @@ func simplifyArb(eVals [][]big.Int, pairs []Pair) [][]big.Int {
 
 	//Whats returned here
 	// [[e0,e1],[e1_, e2], [e2_, e3],[e3_,e4]]
-	for i := 1; i < len(pairs); i = i + 1 {
+
+	for i := 2; i < len(pairs); i = i + 1 {
+		//loop was started at 1 instead of 2 big issue
 		last := len(eVals) - 1
 		e0 := eVals[last][0]
 		e1 := eVals[last][1]
-		e1_ := pairs[i].r_from
-		e2 := pairs[i].r_to
-		val_i0 := Ea(&e0, &e1, &e1_)
-		val_i1 := Eb(&e1, &e1_, &e2)
-		val_i := []big.Int{val_i0, val_i1}
+		e1_ := big.NewRat(pairs[i].r_from.Int64(), 1)
+		e2_ := big.NewRat(pairs[i].r_to.Int64(), 1)
+		val_i0 := Ea(&e0, &e1, e1_)
+		val_i1 := Eb(&e1, e1_, e2_)
+
+		val_i := []big.Rat{val_i0, val_i1}
 		eVals = append(eVals, val_i)
 	}
-	fmt.Println(len(eVals))
 	return eVals
 }
 
-func findDelta(e0, e1 big.Int) big.Int {
-	delta := new(big.Int)
+func findDelta(e0, e1 *big.Rat) big.Int {
 
-	numerator := new(big.Int)
-	x := new(big.Int)
+	//note that the Rationals are not closed under square roots
+	delta := new(big.Int)
+	numerator_rat := new(big.Rat)
+	x := new(big.Rat)
+
+	// ((Ea*Eb*r)**(1/2)-Ea)/r) : rewritten
+	// (Ea*Eb/r)**(1/2)-Ea/r
 
 	//pancake swap fee is 0.025 so value out r, is .975
-	fee_num := big.NewInt(975)
-	fee_dom := big.NewInt(1000)
+	fee := big.NewRat(975, 1000)
+	x = x.Quo(e0, fee)
 
-	x.Mul(&e0, &e1)
-	x.Mul(x, fee_num)
-	x.Div(x, fee_dom)
-	x.Sqrt(x)
-	numerator.Sub(x, &e0)
-	numerator.Mul(numerator, fee_dom)
-	delta.Div(numerator, fee_num)
+	numerator_rat = numerator_rat.Mul(x, e1)
+	num_float, _ := numerator_rat.Float64()
+	numerator := math.Sqrt(num_float)
+	x_float, _ := x.Float64()
+	delta = big.NewInt(int64(math.RoundToEven(numerator - x_float)))
+
 	return *delta
 }
 
 // Note: this might not work for a swap
 func optimalVolume(pairs []Pair) (big.Int, big.Int) {
-	eVals := make([][]big.Int, 0)
-	e0 := Ea(&pairs[0].r_from, &pairs[0].r_to, &pairs[1].r_from)
-	e1 := Eb(&pairs[0].r_to, &pairs[1].r_from, &pairs[1].r_to)
-	eVals = append(eVals, []big.Int{e0, e1})
+	eVals := make([][]big.Rat, 0)
+	e0 := Ea(big.NewRat(pairs[0].r_from.Int64(), 1),
+		big.NewRat(pairs[0].r_to.Int64(), 1),
+		big.NewRat(pairs[1].r_from.Int64(), 1),
+	)
+
+	e1 := Eb(big.NewRat(pairs[0].r_to.Int64(), 1),
+		big.NewRat(pairs[1].r_from.Int64(), 1),
+		big.NewRat(pairs[1].r_to.Int64(), 1),
+	)
+	eVals = append(eVals, []big.Rat{e0, e1})
+
 	eVals_simp := simplifyArb(eVals, pairs)
 
 	ea_val := eVals_simp[len(eVals_simp)-1][0]
 	eb_val := eVals_simp[len(eVals_simp)-1][1]
 
-	delta_in := findDelta(ea_val, eb_val)
+	delta_in := findDelta(&ea_val, &eb_val)
+
+	fmt.Printf("Delta in: %v \n", &delta_in)
 	if delta_in.Cmp(big.NewInt(0)) > 0 {
 		delta_out := evaluate(&ea_val, &eb_val, &delta_in)
 		fmt.Println(ea_val.String(), eb_val.String())

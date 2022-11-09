@@ -72,17 +72,14 @@ func evaluate(e0, f0 *big.Rat, delta *big.Int) big.Int {
 	fee := big.NewRat(975, 1000)
 
 	delta_r := new(big.Rat)
-
 	delta_r.Mul(_delta, fee)
 
 	numerator.Mul(f0, _delta)
 	denominator.Add(e0, delta_r)
-
-	fmt.Printf("Denom %v, Num %v \n", numerator, denominator)
-
 	e.Quo(numerator, denominator)
 
 	Float, _ := e.Float64()
+
 	return *big.NewInt(int64(math.RoundToEven(Float)))
 }
 
