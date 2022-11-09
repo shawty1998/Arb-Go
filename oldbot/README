@@ -1,0 +1,26 @@
+## TODO
+
+Have the correct pairs now I need to make sure I am going in the right direction, check following example,
+
+the issue is that the right direction of the pair is not being used in volume. need to supply the address of the token
+
+
+
+ETH
+22527939319971958450297
+WBNB
+169853549223463540968092
+
+ETH
+5400432720370959874489
+USDC
+17257544153551338075064767
+
+USDC
+5603412306493466237562221
+WBNB
+13232094698769203762915
+
+9465524775748591373553 9426355203010611675807
+0Path: [WBNB ETH USDC WBNB]
+Percentage yield: 0.34

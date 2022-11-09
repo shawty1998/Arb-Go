@@ -1,0 +1,247 @@
+package main
+
+// TODO: implmementation https://gist.github.com/ewancook/d39a06b2ee6e3f7c7c4d6cb66f2dcff7
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+
+	"github.com/gorilla/websocket"
+)
+
+type Book struct {
+	UpdateId int64  `json:"u"`
+	Symbol   string `json:"s"`
+	Bid      string `json:"b"`
+	BidQty   string `json:"B"`
+	Ask      string `json:"a"`
+	AskQty   string `json:"A"`
+}
+
+type Graph struct {
+	nodes   []*GraphNode
+	nodeIds map[string]int
+}
+
+type GraphNode struct {
+	id    int
+	asset string
+	edges map[int]float64
+}
+
+type Edge struct {
+	From   int
+	To     int
+	Weight float64
+}
+
+func New() *Graph {
+	return &Graph{
+		nodes:   []*GraphNode{},
+		nodeIds: make(map[string]int),
+	}
+}
+
+func (g *Graph) AddNode(asset string) (id int) {
+	id, exist := g.nodeIds[asset]
+	if exist {
+		return id
+	} else {
+		id = len(g.nodes)
+		g.nodes = append(g.nodes, &GraphNode{
+			id:    id,
+			asset: asset,
+			edges: make(map[int]float64),
+		})
+		g.nodeIds[asset] = id
+		return id
+
+	}
+}
+
+func (g *Graph) AddEdge(n1, n2 int, w float64) {
+	g.nodes[n1].edges[n2] = w
+}
+
+func (g *Graph) Neighbors(id int) []int {
+	neighbors := []int{}
+	for _, node := range g.nodes {
+		for edge := range node.edges {
+			if node.id == id {
+				neighbors = append(neighbors, edge)
+			}
+			if edge == id {
+				neighbors = append(neighbors, node.id)
+			}
+		}
+	}
+	return neighbors
+}
+
+func (g *Graph) Edges() []Edge {
+	edges := make([]Edge, 0, len(g.nodes))
+	for i := 0; i < len(g.nodes); i++ {
+		for k, v := range g.nodes[i].edges {
+			edges = append(edges, Edge{From: i, To: k, Weight: v})
+		}
+	}
+	return edges
+}
+
+func (g *Graph) BellmanFord(source int) ([]int, []float64) {
+	size := len(g.nodes)
+	distances := make([]float64, size)
+	predecessors := make([]int, size)
+	for i := range g.nodes {
+		distances[i] = math.MaxFloat64
+	}
+	distances[source] = 0
+
+	for i, changes := 0, 0; i < size-1; i, changes = i+1, 0 {
+		for _, edge := range g.Edges() {
+			if newDist := distances[edge.From] + edge.Weight; newDist < distances[edge.To] {
+				distances[edge.To] = newDist
+				predecessors[edge.To] = edge.From
+				changes++
+			}
+		}
+		if changes == 0 {
+			break
+		}
+	}
+	return predecessors, distances
+
+}
+
+func (g *Graph) FindNegativeWeightCycle(predecessors []int, distances []float64, source int) []int {
+	for _, edge := range g.Edges() {
+		if distances[edge.From]+edge.Weight < distances[edge.To] {
+			return arbitrageLoop(predecessors, source)
+		}
+	}
+	return nil
+}
+
+func arbitrageLoop(predecessors []int, source int) []int {
+	size := len(predecessors)
+	loop := make([]int, size)
+	loop[0] = source
+
+	exists := make([]bool, size)
+	exists[source] = true
+
+	indices := make([]int, size)
+
+	var index, next int
+	for index, next = 1, source; ; index++ {
+		next = predecessors[next]
+		loop[index] = next
+		if exists[next] {
+			return loop[indices[next] : index+1]
+		}
+		indices[next] = index
+		exists[next] = true
+	}
+}
+
+func (g *Graph) FindArbitrageLoop(source int) []int {
+	if len(g.nodes) <= 1 {
+		return nil
+	}
+	predecessors, distances := g.BellmanFord(source)
+	return g.FindNegativeWeightCycle(predecessors, distances, source)
+}
+
+func main() {
+	// websocket client connection
+	c, _, err := websocket.DefaultDialer.Dial("wss://stream.binance.com:9443/ws/!bookTicker", nil)
+	if err != nil {
+		panic(err)
+	}
+	defer c.Close()
+
+	input := make(chan Book) // 1️⃣
+	go func() {              // 2️⃣
+		// read from the websocket
+		for {
+			_, message, err := c.ReadMessage() // 3️⃣
+			if err != nil {
+				break
+			}
+			// unmarshal the message
+			var book Book
+			json.Unmarshal(message, &book) // 4️⃣
+			// send the trade to the channel
+			input <- book // 5️⃣
+		}
+		close(input) // 6️⃣
+	}()
+
+	arb := make(chan []int)
+	go func() {
+		market := New()
+		for trade := range input {
+			if strings.Contains(trade.Symbol, "ETH") && strings.Contains(trade.Symbol, "ETH") {
+				// split the pair
+				var other string
+				var eth string
+				eth_pair_index := strings.Index(trade.Symbol, "ETH")
+				if eth_pair_index == 0 {
+					other = trade.Symbol[3:]
+					eth = trade.Symbol[:3]
+
+					other_node := market.AddNode(other)
+					eth_node := market.AddNode(eth)
+
+					// Buy Eth for bid amount of other, sell eth of ask amount of other
+					// ETH -> OTHER @ bid
+					// Other -> ETH @ ask
+					var Bid, Ask float64
+					var errBid, errAsk error
+
+					Bid, errBid = strconv.ParseFloat(trade.Bid, 64)
+					Ask, errAsk = strconv.ParseFloat(trade.Ask, 64)
+					if errAsk != nil || errBid != nil {
+						market.AddEdge(eth_node, other_node, -math.Log(Bid))
+						market.AddEdge(other_node, eth_node, -math.Log(Ask))
+					}
+
+					// fmt.Println(other_node, eth_node, trade.Symbol)
+				} else {
+					other = trade.Symbol[:eth_pair_index]
+					eth = trade.Symbol[eth_pair_index:]
+					other_node := market.AddNode(other)
+					eth_node := market.AddNode(eth)
+
+					// Buy Other for bid amount of eth, sell other for ask amount of eth
+					// OTHER -> ETH @ bid
+					// ETH -> OTHER @ ask
+					var Bid, Ask float64
+					var errBid, errAsk error
+
+					Bid, errBid = strconv.ParseFloat(trade.Bid, 64)
+					Ask, errAsk = strconv.ParseFloat(trade.Ask, 64)
+					if errAsk != nil || errBid != nil {
+						market.AddEdge(other_node, eth_node, -math.Log(Bid))
+						market.AddEdge(eth_node, other_node, -math.Log(Ask))
+					}
+
+					// fmt.Println(other_node, eth_node, trade.Symbol)
+				}
+			}
+		}
+		var source int = 0
+		loop := market.FindArbitrageLoop(source)
+		if loop != nil {
+			arb <- loop
+		}
+	}()
+
+	for opportunity := range arb {
+		fmt.Println(opportunity)
+	}
+
+}

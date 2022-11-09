@@ -1,0 +1,14 @@
+{
+  "name": "oldbot",
+  "version": "1.0.0",
+  "description": "Have the correct pairs now I need to make sure I am going in the right direction, check following example,",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "web3": "^1.7.3"
+  }
+}
